@@ -28,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   const { amount, description, date } = req.body;
-  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
   if (!date) return res.status(400).json({ error: 'date is required' });
   const [month, year] = monthYearFromDate(date);
   try {
@@ -50,7 +50,7 @@ async function isLinkedToWithdrawal(id: string): Promise<boolean> {
 
 router.put('/:id', async (req: Request, res: Response) => {
   const { amount, description, date } = req.body;
-  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
   if (!date) return res.status(400).json({ error: 'date is required' });
   const [month, year] = monthYearFromDate(date);
   try {

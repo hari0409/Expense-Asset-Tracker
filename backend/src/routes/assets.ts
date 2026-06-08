@@ -195,24 +195,27 @@ router.post('/:id/entries', async (req: Request, res: Response) => {
   if (amount === undefined || amount === null) return res.status(400).json({ error: 'amount required' });
   const amt = Number(amount);
   const entryDate = date || new Date().toISOString().slice(0, 10);
+  const tx = await db.transaction('write');
   try {
     let linkedExpenseId: number | null = null;
     if (amt < 0 && isExpense) {
       const description = note || `Withdrawal from ${await assetName(req.params.id)}`;
       const [month, year] = monthYearFromDate(entryDate);
-      const expResult = await db.execute({
+      const expResult = await tx.execute({
         sql: 'INSERT INTO unplanned_expenses (amount, description, date, month, year) VALUES (?, ?, ?, ?, ?)',
         args: [Math.abs(amt), description, entryDate, month, year],
       });
       linkedExpenseId = Number(expResult.lastInsertRowid!);
     }
-    const result = await db.execute({
+    const result = await tx.execute({
       sql: 'INSERT INTO asset_manual_entries (asset_id, amount, note, date, linked_unplanned_expense_id) VALUES (?, ?, ?, ?, ?)',
       args: [req.params.id, amt, note || null, entryDate, linkedExpenseId],
     });
+    await tx.commit();
     const row = await db.execute({ sql: 'SELECT * FROM asset_manual_entries WHERE id = ?', args: [result.lastInsertRowid!] });
     res.status(201).json(row.rows[0]);
   } catch (e: any) {
+    await tx.rollback();
     res.status(500).json({ error: e.message });
   }
 });
@@ -269,16 +272,19 @@ router.put('/:id/entries/:entryId', async (req: Request, res: Response) => {
 });
 
 router.delete('/:id/entries/:entryId', async (req: Request, res: Response) => {
+  const existing = await db.execute({ sql: 'SELECT linked_unplanned_expense_id FROM asset_manual_entries WHERE id = ? AND asset_id = ?', args: [req.params.entryId, req.params.id] });
+  const linkedId = existing.rows[0]?.linked_unplanned_expense_id;
+  const tx = await db.transaction('write');
   try {
-    const existing = await db.execute({ sql: 'SELECT linked_unplanned_expense_id FROM asset_manual_entries WHERE id = ? AND asset_id = ?', args: [req.params.entryId, req.params.id] });
-    const linkedId = existing.rows[0]?.linked_unplanned_expense_id;
     // Delete the referencing entry first — SQLite rejects deleting a row still pointed at by a FK.
-    await db.execute({ sql: 'DELETE FROM asset_manual_entries WHERE id = ? AND asset_id = ?', args: [req.params.entryId, req.params.id] });
+    await tx.execute({ sql: 'DELETE FROM asset_manual_entries WHERE id = ? AND asset_id = ?', args: [req.params.entryId, req.params.id] });
     if (linkedId != null) {
-      await db.execute({ sql: 'DELETE FROM unplanned_expenses WHERE id = ?', args: [linkedId] });
+      await tx.execute({ sql: 'DELETE FROM unplanned_expenses WHERE id = ?', args: [linkedId] });
     }
+    await tx.commit();
     res.status(204).end();
   } catch (e: any) {
+    await tx.rollback();
     res.status(500).json({ error: e.message });
   }
 });

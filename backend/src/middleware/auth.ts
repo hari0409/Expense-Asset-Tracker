@@ -23,9 +23,10 @@ export async function getJwtSecret(): Promise<string> {
     return cachedSecret;
   }
   const secret = crypto.randomBytes(48).toString('hex');
-  await db.execute({ sql: `INSERT INTO app_meta (key, value) VALUES ('jwt_secret', ?)`, args: [secret] });
-  cachedSecret = secret;
-  return secret;
+  await db.execute({ sql: `INSERT OR IGNORE INTO app_meta (key, value) VALUES ('jwt_secret', ?)`, args: [secret] });
+  const winner = await db.execute({ sql: `SELECT value FROM app_meta WHERE key = 'jwt_secret'`, args: [] });
+  cachedSecret = String(winner.rows[0].value);
+  return cachedSecret;
 }
 
 export async function signSession(userId: number): Promise<string> {

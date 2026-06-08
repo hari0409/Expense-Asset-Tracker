@@ -67,8 +67,9 @@ router.post('/persons/:id/settle', async (req: Request, res: Response) => {
   const { amount, date, notes } = req.body as { amount: number; date?: string; notes?: string };
   if (!amount || amount <= 0) return res.status(400).json({ error: 'Amount must be > 0' });
 
+  const tx = await db.transaction('write');
   try {
-    const pending = await db.execute({
+    const pending = await tx.execute({
       sql: `SELECT * FROM rent_out_entries
             WHERE person_id = ? AND status != 'paid'
             ORDER BY date_given ASC, created_at ASC`,
@@ -83,22 +84,23 @@ router.post('/persons/:id/settle', async (req: Request, res: Response) => {
       const pay = Math.min(owed, remaining);
       const newReturned = Number(entry.amount_returned) + pay;
       const status = newReturned >= Number(entry.amount) ? 'paid' : 'partial';
-      await db.execute({
+      await tx.execute({
         sql: 'UPDATE rent_out_entries SET amount_returned=?, status=? WHERE id=?',
         args: [newReturned, status, entry.id],
       });
       remaining -= pay;
     }
 
-    // Record the settlement as a separate entry
     const settled = amount - remaining;
-    await db.execute({
+    await tx.execute({
       sql: 'INSERT INTO rent_out_settlements (person_id, amount, date, notes) VALUES (?, ?, ?, ?)',
       args: [req.params.id, settled, date ?? new Date().toISOString().split('T')[0], notes ?? null],
     });
 
+    await tx.commit();
     res.json({ settled, leftover: remaining });
   } catch (e: any) {
+    await tx.rollback();
     res.status(500).json({ error: e.message });
   }
 });
@@ -160,7 +162,7 @@ router.get('/entries', async (req: Request, res: Response) => {
 
 router.post('/entries', async (req: Request, res: Response) => {
   const { person_id, amount, description, date_given, notes } = req.body;
-  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
   try {
     const result = await db.execute({
       sql: 'INSERT INTO rent_out_entries (person_id, amount, description, date_given, notes) VALUES (?, ?, ?, ?, ?)',

@@ -10,50 +10,7 @@ const db = createClient({
 });
 
 export async function initDb() {
-  // Migrate: add sort_order if missing (idempotent)
-  try {
-    await db.execute({ sql: 'ALTER TABLE expense_categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE savings_instruments ADD COLUMN asset_name TEXT', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE savings_instruments ADD COLUMN include_in_assets INTEGER NOT NULL DEFAULT 1', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE assets ADD COLUMN include_in_total INTEGER NOT NULL DEFAULT 1', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE savings_instruments ADD COLUMN asset_id INTEGER REFERENCES assets(id)', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE assets ADD COLUMN base_value REAL NOT NULL DEFAULT 0', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE asset_manual_entries ADD COLUMN linked_unplanned_expense_id INTEGER REFERENCES unplanned_expenses(id)', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE expenses ADD COLUMN formula TEXT', args: [] });
-  } catch { /* column already exists */ }
-  try {
-    await db.execute({ sql: 'ALTER TABLE expenses ADD COLUMN updated_at TEXT', args: [] });
-  } catch { /* column already exists */ }
-  await db.execute({ sql: "UPDATE expenses SET updated_at = created_at WHERE updated_at IS NULL", args: [] });
-  try {
-    await db.execute({ sql: 'ALTER TABLE users ADD COLUMN webauthn_enabled INTEGER NOT NULL DEFAULT 1', args: [] });
-  } catch { /* column already exists */ }
-
-  await db.executeMultiple(`
-    CREATE TABLE IF NOT EXISTS asset_manual_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-      amount REAL NOT NULL,
-      note TEXT,
-      date TEXT NOT NULL DEFAULT (date('now')),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-
+  // 1. Schema — runs first so tables exist before any ALTER/UPDATE migration
   await db.executeMultiple(`
     CREATE TABLE IF NOT EXISTS expense_categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +62,9 @@ export async function initDb() {
       color TEXT NOT NULL DEFAULT '#10b981',
       monthly_target REAL NOT NULL DEFAULT 0,
       notes TEXT,
+      asset_name TEXT,
+      include_in_assets INTEGER NOT NULL DEFAULT 1,
+      asset_id INTEGER REFERENCES assets(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -133,6 +93,8 @@ export async function initDb() {
       name TEXT NOT NULL UNIQUE,
       type TEXT NOT NULL,
       current_value REAL NOT NULL DEFAULT 0,
+      base_value REAL NOT NULL DEFAULT 0,
+      include_in_total INTEGER NOT NULL DEFAULT 1,
       color TEXT NOT NULL DEFAULT '#f59e0b',
       notes TEXT,
       last_updated TEXT NOT NULL DEFAULT (datetime('now')),
@@ -147,6 +109,16 @@ export async function initDb() {
       value REAL NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(asset_id, month, year)
+    );
+
+    CREATE TABLE IF NOT EXISTS asset_manual_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+      amount REAL NOT NULL,
+      note TEXT,
+      date TEXT NOT NULL DEFAULT (date('now')),
+      linked_unplanned_expense_id INTEGER REFERENCES unplanned_expenses(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -230,56 +202,6 @@ export async function initDb() {
     );
   `);
 
-  await backfillInstrumentAssetMapping();
-}
-
-// One-time migration: derive explicit instrument->asset_id from the old hardcoded
-// mapping, then set each asset's base_value so that the new derived current_value
-// (base_value + SUM(mapped entries)) equals the value stored today (no jump).
-const SAVINGS_TO_ASSET_TYPE: Record<string, string> = {
-  SIP: 'Mutual Fund', PPF: 'PPF', Stocks: 'Stocks', FD: 'FD', RD: 'FD',
-  NPS: 'NPS', Crypto: 'Crypto', Cash: 'Cash', 'Bank Savings': 'Bank Savings',
-};
-
-async function backfillInstrumentAssetMapping() {
-  const done = await db.execute({ sql: `SELECT value FROM app_meta WHERE key = 'mapping_backfill_done'`, args: [] });
-  if (done.rows.length > 0) return;
-
-  const [instruments, assets] = await Promise.all([
-    db.execute({ sql: 'SELECT id, type, asset_name FROM savings_instruments', args: [] }),
-    db.execute({ sql: 'SELECT id, name, type, current_value FROM assets', args: [] }),
-  ]);
-
-  // Map each instrument to an asset by name/type (case-insensitive), mirroring old syncAsset.
-  for (const instr of instruments.rows) {
-    const key = String(instr.type) === 'Other'
-      ? (instr.asset_name ? String(instr.asset_name) : null)
-      : (SAVINGS_TO_ASSET_TYPE[String(instr.type)] ?? null);
-    if (!key) continue;
-    const k = key.toLowerCase();
-    const match = assets.rows.find(a =>
-      String(a.name).toLowerCase() === k || String(a.type).toLowerCase() === k
-    );
-    if (match) {
-      await db.execute({ sql: 'UPDATE savings_instruments SET asset_id = ? WHERE id = ?', args: [Number(match.id), Number(instr.id)] });
-    }
-  }
-
-  // Set base_value = current_value - SUM(mapped entries), floored at 0.
-  for (const a of assets.rows) {
-    const contrib = await db.execute({
-      sql: `SELECT COALESCE(SUM(se.amount), 0) AS total
-            FROM savings_entries se
-            JOIN savings_instruments si ON si.id = se.instrument_id
-            WHERE si.asset_id = ?`,
-      args: [Number(a.id)],
-    });
-    const sum = Number(contrib.rows[0]?.total ?? 0);
-    const base = Math.max(0, Number(a.current_value) - sum);
-    await db.execute({ sql: 'UPDATE assets SET base_value = ? WHERE id = ?', args: [base, Number(a.id)] });
-  }
-
-  await db.execute({ sql: `INSERT INTO app_meta (key, value) VALUES ('mapping_backfill_done', datetime('now'))`, args: [] });
 }
 
 export default db;

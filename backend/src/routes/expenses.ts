@@ -104,7 +104,7 @@ router.get('/category-range-summary', async (req: Request, res: Response) => {
 
 router.post('/', async (req: Request, res: Response) => {
   const { category_id, amount, formula, description, date } = req.body;
-  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
   try {
     const result = await db.execute({
       sql: "INSERT INTO expenses (category_id, amount, formula, description, date, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
@@ -124,6 +124,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', async (req: Request, res: Response) => {
   const { amount, formula, description, date, category_id } = req.body;
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be > 0' });
   try {
     await db.execute({
       sql: "UPDATE expenses SET amount = ?, formula = ?, description = ?, date = ?, category_id = ?, updated_at = datetime('now') WHERE id = ?",

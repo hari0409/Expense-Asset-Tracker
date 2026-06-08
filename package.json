@@ -5,7 +5,8 @@
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "setup": "npm run install:all && cd backend && npm run db:init"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

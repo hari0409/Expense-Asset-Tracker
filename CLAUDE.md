@@ -153,7 +153,7 @@ All routes except `/api/auth/*` require `requireAuth` middleware (applied in `in
 ## Notes for AI Agents
 
 - No test suite. Do not generate test files unless asked.
-- No git history. This is a local-only app with no CI.
+- Git repo on branch `main` with remote `origin`. Use `git log`, `git diff`, `git blame` for history context.
 - Once a task is done, inform the user. **Do not run the dev server or browser to verify** — user validates UI.
 - `frontend/src/api.ts` is the canonical place for both API calls and TypeScript types. Add new types/calls here, not in page files.
 - When adding a new domain: create `backend/src/routes/<domain>.ts`, add table(s) in `db.ts`, mount in `index.ts` (apply `requireAuth` before the router), add API functions + types to `frontend/src/api.ts`, create `frontend/src/pages/<Domain>.tsx`, add route in `App.tsx`, add nav link in `Layout.tsx`.
