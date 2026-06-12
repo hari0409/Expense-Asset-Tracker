@@ -167,7 +167,7 @@ export const api = {
   getAssetsTimeline: () => req<AssetTimelinePoint[]>('/assets/timeline'),
   getAssetsTimelineMonth: (year: number, month: number) => req<AssetSnapshotRow[]>(`/assets/timeline/${year}/${month}`),
   getAssetEntries: (assetId: number) => req<AssetManualEntry[]>(`/assets/${assetId}/entries`),
-  createAssetEntry: (assetId: number, body: { amount: number; note?: string; date?: string; targets?: { asset_id: number; amount: number }[] }) =>
+  createAssetEntry: (assetId: number, body: { amount: number; note?: string; date?: string; targets?: { asset_id: number; amount: number; note?: string }[] }) =>
     req<AssetManualEntry>(`/assets/${assetId}/entries`, { method: 'POST', body: JSON.stringify(body) }),
   updateAssetEntry: (assetId: number, entryId: number, body: { amount: number; note?: string; date?: string }) =>
     req<AssetManualEntry>(`/assets/${assetId}/entries/${entryId}`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -425,6 +425,7 @@ export interface AssetManualEntry {
   date: string;
   linked_unplanned_expense_id: number | null;
   transfer_group: string | null;
+  transfer_counterparty: string | null;
   adhoc_budget_id: number | null;
   adhoc_budget_name: string | null;
   created_at: string;

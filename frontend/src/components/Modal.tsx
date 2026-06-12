@@ -5,9 +5,16 @@ interface Props {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  size?: 'md' | 'lg' | 'xl';
 }
 
-export default function Modal({ title, onClose, children }: Props) {
+const SIZE_CLASSES = {
+  md: 'max-w-md',
+  lg: 'max-w-2xl',
+  xl: 'max-w-4xl',
+};
+
+export default function Modal({ title, onClose, children, size = 'md' }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -16,7 +23,7 @@ export default function Modal({ title, onClose, children }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="card w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl shadow-black/50">
+      <div className={`card w-full ${SIZE_CLASSES[size]} max-h-[90vh] overflow-y-auto shadow-2xl shadow-black/50`}>
         <div className="flex items-center justify-between p-5 border-b border-line">
           <h2 className="text-base font-semibold text-ink">{title}</h2>
           <button onClick={onClose} className="text-ink-faint hover:text-ink transition-colors">

@@ -201,7 +201,14 @@ router.get('/:id/entries', async (req: Request, res: Response) => {
   try {
     if (!(await userAsset(req.params.id, req.userId!))) return res.status(404).json({ error: 'asset not found' });
     const result = await db.execute({
-      sql: `SELECT me.*, ab.name AS adhoc_budget_name
+      sql: `SELECT me.*, ab.name AS adhoc_budget_name,
+              (SELECT GROUP_CONCAT(a2.name, ', ')
+               FROM asset_manual_entries me2
+               JOIN assets a2 ON a2.id = me2.asset_id
+               WHERE me2.transfer_group = me.transfer_group
+                 AND me2.id != me.id
+                 AND ((me.amount < 0 AND me2.amount > 0) OR (me.amount > 0 AND me2.amount < 0))
+              ) AS transfer_counterparty
             FROM asset_manual_entries me
             LEFT JOIN adhoc_budgets ab ON ab.id = me.adhoc_budget_id
             WHERE me.asset_id = ?
@@ -239,9 +246,9 @@ router.post('/:id/entries', async (req: Request, res: Response) => {
   }
 
   // Negative amount = transfer out — must be mapped to one or more target assets that sum to it.
-  const targets: { asset_id: number; amount: number }[] = Array.isArray(req.body.targets) ? req.body.targets : [];
+  const targets: { asset_id: number; amount: number; note?: string }[] = Array.isArray(req.body.targets) ? req.body.targets : [];
   const clean = targets
-    .map((t) => ({ asset_id: Number(t.asset_id), amount: Number(t.amount) }))
+    .map((t) => ({ asset_id: Number(t.asset_id), amount: Number(t.amount), note: t.note ? String(t.note) : null }))
     .filter((t) => t.asset_id && !isNaN(t.amount) && t.amount > 0);
   if (clean.length === 0) return res.status(400).json({ error: 'Withdrawals must move money to at least one target asset' });
   if (clean.some((t) => t.asset_id === Number(req.params.id))) return res.status(400).json({ error: 'Target asset must differ from the source asset' });
@@ -264,7 +271,7 @@ router.post('/:id/entries', async (req: Request, res: Response) => {
     for (const t of clean) {
       await tx.execute({
         sql: 'INSERT INTO asset_manual_entries (asset_id, amount, note, date, transfer_group) VALUES (?, ?, ?, ?, ?)',
-        args: [t.asset_id, t.amount, note || `Transfer from ${srcName}`, entryDate, transferGroup],
+        args: [t.asset_id, t.amount, t.note || note || `Transfer from ${srcName}`, entryDate, transferGroup],
       });
     }
     await tx.commit();

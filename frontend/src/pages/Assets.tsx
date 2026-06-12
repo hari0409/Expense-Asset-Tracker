@@ -327,7 +327,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [targets, setTargets] = useState<{ asset_id: string; amount: string }[]>([{ asset_id: '', amount: '' }]);
+  const [targets, setTargets] = useState<{ asset_id: string; amount: string; note: string }[]>([{ asset_id: '', amount: '', note: '' }]);
   const [err, setErr] = useState('');
   const [entryToDelete, setEntryToDelete] = useState<AssetManualEntry | null>(null);
 
@@ -336,7 +336,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
 
   const resetForm = () => {
     setEditingId(null); setAmount(''); setNote('');
-    setTargets([{ asset_id: '', amount: '' }]);
+    setTargets([{ asset_id: '', amount: '', note: '' }]);
     setDate(new Date().toISOString().slice(0, 10));
   };
 
@@ -358,7 +358,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
   const remainder = Math.round((Math.abs(amountNum) - targetSum) * 100) / 100;
   const transferReady = isWithdrawal && targets.some(t => t.asset_id && Number(t.amount) > 0) && remainder === 0;
 
-  const setTarget = (i: number, patch: Partial<{ asset_id: string; amount: string }>) =>
+  const setTarget = (i: number, patch: Partial<{ asset_id: string; amount: string; note: string }>) =>
     setTargets(ts => ts.map((t, idx) => idx === i ? { ...t, ...patch } : t));
 
   const save = async () => {
@@ -372,7 +372,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
     } else if (n < 0) {
       const clean = targets
         .filter(t => t.asset_id && Number(t.amount) > 0)
-        .map(t => ({ asset_id: Number(t.asset_id), amount: Number(t.amount) }));
+        .map(t => ({ asset_id: Number(t.asset_id), amount: Number(t.amount), note: t.note || undefined }));
       if (clean.length === 0) return setErr('Map the withdrawal to at least one target asset');
       if (remainder !== 0) return setErr('Target amounts must add up to the withdrawal');
       await api.createAssetEntry(Number(asset.id), { amount: n, note: note || undefined, date, targets: clean });
@@ -391,7 +391,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
   const total = entries.reduce((s, e) => s + Number(e.amount), 0);
 
   return (
-    <Modal title={`Manual entries — ${asset.name}`} onClose={onClose}>
+    <Modal title={`Manual entries — ${asset.name}`} onClose={onClose} size="lg">
       <div className="space-y-4">
         <div className="grid grid-cols-3 gap-2">
           <div className="col-span-1">
@@ -442,6 +442,10 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
                   type="number" value={t.amount} onChange={e => setTarget(i, { amount: e.target.value })}
                   placeholder="₹" className="w-28 border border-line rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+                <input
+                  value={t.note} onChange={e => setTarget(i, { note: e.target.value })}
+                  placeholder="Description (optional)" className="flex-1 border border-line rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                />
                 {targets.length > 1 && (
                   <button onClick={() => setTargets(ts => ts.filter((_, idx) => idx !== i))} className="p-1 text-ink-faint hover:text-red-500">
                     <Trash2 size={14} />
@@ -450,7 +454,7 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
               </div>
             ))}
             <div className="flex items-center justify-between">
-              <button onClick={() => setTargets(ts => [...ts, { asset_id: '', amount: '' }])} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+              <button onClick={() => setTargets(ts => [...ts, { asset_id: '', amount: '', note: '' }])} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
                 <Plus size={12} /> Add target
               </button>
               <span className={`text-xs ${remainder === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
@@ -494,7 +498,14 @@ function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: A
                         <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-red-500/10 text-red-500 align-middle">expense</span>
                       )}
                       {e.transfer_group != null && (
-                        <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-sky-500/10 text-sky-400 align-middle">transfer</span>
+                        <span className="relative inline-block group ml-1.5 align-middle">
+                          <span className="px-1.5 py-0.5 text-[10px] rounded bg-sky-500/10 text-sky-400">transfer</span>
+                          {e.transfer_counterparty && (
+                            <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1 hidden group-hover:block whitespace-nowrap px-2 py-1 text-[11px] rounded bg-surface-2 border border-line text-ink shadow-lg z-10">
+                              {Number(e.amount) >= 0 ? 'From' : 'To'} {e.transfer_counterparty}
+                            </span>
+                          )}
+                        </span>
                       )}
                       {e.adhoc_budget_id != null && (
                         <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-purple-500/10 text-purple-400 align-middle">{e.adhoc_budget_name} spends</span>
