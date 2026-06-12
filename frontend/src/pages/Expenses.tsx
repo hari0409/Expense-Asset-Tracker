@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import type { Category, Expense, UnplannedExpense } from '../api';
+import type { Category, Expense, UnplannedExpense, AdhocBudget, Asset } from '../api';
 import MonthPicker from '../components/MonthPicker';
 import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
-import { Plus, Trash2, Pencil, Copy, ChevronDown, ChevronUp, TableProperties, X, LayoutGrid, Table2, GripVertical, MoreHorizontal, Zap } from 'lucide-react';
+import { Plus, Trash2, Pencil, Copy, ChevronDown, ChevronUp, TableProperties, X, LayoutGrid, Table2, GripVertical, MoreHorizontal, Zap, RotateCcw, Shuffle, Archive } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 const now = new Date();
@@ -69,6 +69,20 @@ function amountInputValue(expense: Expense): string {
   return expense.formula ?? String(expense.amount);
 }
 
+// Unified "sudden expense" — either a regular expense booked under the reserved
+// Unplanned category (origin 'category') or an adhoc-budget spend (origin 'adhoc').
+interface UnplannedItem {
+  id: number;
+  amount: number;
+  description: string | null;
+  date: string;
+  origin: 'category' | 'adhoc';
+  adhoc_budget_id?: number | null;
+  adhoc_budget_name?: string | null;
+  source_asset_id?: number | null;
+  source_asset_name?: string | null;
+}
+
 export default function Expenses() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -102,7 +116,16 @@ export default function Expenses() {
   const [showAddUnplanned, setShowAddUnplanned] = useState(false);
   const [plannedOpen, setPlannedOpen] = useState(true);
   const [unplannedOpen, setUnplannedOpen] = useState(false);
-  const [unplannedToDelete, setUnplannedToDelete] = useState<UnplannedExpense | null>(null);
+  const [unplannedToDelete, setUnplannedToDelete] = useState<UnplannedItem | null>(null);
+  const [unplannedFilter, setUnplannedFilter] = useState('');
+  const [budgets, setBudgets] = useState<AdhocBudget[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [activeTab, setActiveTab] = useState<'expenses' | 'budgets'>('expenses');
+  const [showBudgetModal, setShowBudgetModal] = useState(false);
+  const [editingBudget, setEditingBudget] = useState<AdhocBudget | null>(null);
+  const [budgetToReset, setBudgetToReset] = useState<AdhocBudget | null>(null);
+  const [resetMode, setResetMode] = useState<'close' | 'reset'>('close');
+  const [budgetToDelete, setBudgetToDelete] = useState<AdhocBudget | null>(null);
   const [catToDelete, setCatToDelete] = useState<Category | null>(null);
   const [expToDelete, setExpToDelete] = useState<Expense | null>(null);
   const [showResetCategoriesConfirm, setShowResetCategoriesConfirm] = useState(false);
@@ -112,10 +135,13 @@ export default function Expenses() {
     api.getCategories(month, year).then(setCats);
     api.getExpenses({ month, year }).then(setExpenses);
     api.getUnplannedExpenses({ month, year }).then(setUnplanned);
+    api.getAdhocBudgets().then(setBudgets);
+    api.getAssets().then(setAssets);
   };
 
-  const deleteUnplanned = async (id: number) => {
-    await api.deleteUnplannedExpense(id);
+  const deleteUnplannedItem = async (item: UnplannedItem) => {
+    if (item.origin === 'category') await api.deleteExpense(item.id);
+    else await api.deleteUnplannedExpense(item.id);
     load();
   };
 
@@ -141,10 +167,36 @@ export default function Expenses() {
     await api.reorderCategories(ids.map(c => Number(c.id)));
   };
 
+  const unplannedCat = cats.find(c => c.kind === 'unplanned') ?? null;
+  const monthlyUnplannedExpenses = unplannedCat ? expensesForCat(Number(unplannedCat.id)) : [];
+
   const totalBudget = cats.reduce((s, c) => s + Number(c.budget), 0);
   const totalSpent = cats.reduce((s, c) => s + Number(c.spent), 0);
-  const totalUnplanned = unplanned.reduce((s, u) => s + Number(u.amount), 0);
-  const totalExpense = totalSpent + totalUnplanned;
+  const plannedSpent = cats.filter(c => c.kind !== 'unplanned').reduce((s, c) => s + Number(c.spent), 0);
+  const adhocUnplannedTotal = unplanned.reduce((s, u) => s + Number(u.amount), 0);
+  const monthlyUnplannedTotal = monthlyUnplannedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+  const totalUnplanned = monthlyUnplannedTotal + adhocUnplannedTotal;
+
+  const unplannedItems: UnplannedItem[] = [
+    ...monthlyUnplannedExpenses.map(e => ({
+      id: Number(e.id), amount: Number(e.amount), description: e.description, date: e.date,
+      origin: 'category' as const,
+    })),
+    ...unplanned.map(u => ({
+      id: Number(u.id), amount: Number(u.amount), description: u.description, date: u.date,
+      origin: 'adhoc' as const,
+      adhoc_budget_id: u.adhoc_budget_id, adhoc_budget_name: u.adhoc_budget_name,
+      source_asset_id: u.source_asset_id, source_asset_name: u.source_asset_name,
+    })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+
+  const filteredUnplanned = unplannedItems.filter(u => {
+    if (unplannedFilter === '') return true;
+    if (unplannedFilter === 'monthly') return u.origin === 'category';
+    return u.origin === 'adhoc' && String(u.adhoc_budget_id) === unplannedFilter;
+  });
+
+  const totalExpense = plannedSpent + totalUnplanned;
   const overallPct = totalBudget > 0 ? Math.min(100, (totalSpent / totalBudget) * 100) : 0;
   const overBudget = totalBudget > 0 && totalSpent > totalBudget;
 
@@ -154,38 +206,69 @@ export default function Expenses() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-ink">Expenses</h1>
         <div className="flex items-center gap-2">
-          <MonthPicker month={month} year={year} onChange={(m, y) => { setMonth(m); setYear(y); }} />
-          <button
-            onClick={handleCopyPrevMonth}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm bg-surface-2 text-ink rounded-lg hover:bg-surface-2 transition-colors"
-          >
-            <Copy size={14} /> Copy prev month
-          </button>
-          {viewMode === 'cards' && (
-            <button
-              onClick={() => setShowBatchModal(true)}
-              disabled={cats.length === 0}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <TableProperties size={14} /> Add expenses
-            </button>
+          {activeTab === 'expenses' && (
+            <>
+              {(month !== now.getMonth() + 1 || year !== now.getFullYear()) && (
+                <button
+                  onClick={() => { setMonth(now.getMonth() + 1); setYear(now.getFullYear()); }}
+                  className="text-xs text-ink-muted hover:text-ink border border-line hover:border-line-strong px-2 py-1 rounded-md transition-colors"
+                  title="Go to current month"
+                >
+                  Today
+                </button>
+              )}
+              <MonthPicker month={month} year={year} onChange={(m, y) => { setMonth(m); setYear(y); }} />
+              <button
+                onClick={handleCopyPrevMonth}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm bg-surface-2 text-ink rounded-lg hover:bg-surface-2 transition-colors"
+              >
+                <Copy size={14} /> Copy prev month
+              </button>
+              {viewMode === 'cards' && (
+                <button
+                  onClick={() => setShowBatchModal(true)}
+                  disabled={cats.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <TableProperties size={14} /> Add expenses
+                </button>
+              )}
+              <OverflowMenu
+                viewMode={viewMode}
+                onSetViewMode={setViewMode}
+                onAddCategory={() => { setEditingCat(null); setShowCatModal(true); }}
+                onResetCategories={() => setShowResetCategoriesConfirm(true)}
+                onClearExpenses={() => { if (totalSpent > 0) setShowClearExpensesConfirm(true); }}
+                hasExpenses={totalSpent > 0}
+              />
+            </>
           )}
-          <OverflowMenu
-            viewMode={viewMode}
-            onSetViewMode={setViewMode}
-            onAddCategory={() => { setEditingCat(null); setShowCatModal(true); }}
-            onResetCategories={() => setShowResetCategoriesConfirm(true)}
-            onClearExpenses={() => { if (totalSpent > 0) setShowClearExpensesConfirm(true); }}
-            hasExpenses={totalSpent > 0}
-          />
         </div>
       </div>
 
+      {/* Sub-tabs */}
+      <div className="flex items-center gap-1 border-b border-line">
+        <button
+          onClick={() => setActiveTab('expenses')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'expenses' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'}`}
+        >
+          Expenses
+        </button>
+        <button
+          onClick={() => setActiveTab('budgets')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'budgets' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'}`}
+        >
+          Budgets{budgets.length > 0 ? ` (${budgets.length})` : ''}
+        </button>
+      </div>
+
+      {activeTab === 'expenses' && (
+      <>
       {/* Total expense — planned + unplanned */}
       <div className="bg-surface rounded-2xl border border-line p-4">
         <p className="text-xs text-ink-muted mb-0.5">Total expense this month</p>
         <p className="text-2xl font-bold text-ink">₹{totalExpense.toLocaleString('en-IN')}</p>
-        <p className="text-xs text-ink-faint mt-1">Planned ₹{totalSpent.toLocaleString('en-IN')} + Unplanned ₹{totalUnplanned.toLocaleString('en-IN')}</p>
+        <p className="text-xs text-ink-faint mt-1">Planned ₹{plannedSpent.toLocaleString('en-IN')} + Unplanned ₹{totalUnplanned.toLocaleString('en-IN')}</p>
       </div>
 
       {/* Planned (foldable) */}
@@ -272,7 +355,7 @@ export default function Expenses() {
                         ? 'border-indigo-400 shadow-md'
                         : 'border-line'
                     } ${dragId === Number(cat.id) ? 'opacity-50' : ''}`}
-                    draggable
+                    draggable={cat.kind !== 'unplanned'}
                     onDragStart={() => setDragId(Number(cat.id))}
                     onDragOver={e => { e.preventDefault(); setDragOverId(Number(cat.id)); }}
                     onDragLeave={() => setDragOverId(null)}
@@ -283,13 +366,24 @@ export default function Expenses() {
                       className="flex items-center gap-4 p-4 cursor-pointer hover:bg-surface-2 transition-colors"
                       onClick={() => setExpandedCat(expanded ? null : Number(cat.id))}
                     >
-                      <div className="text-ink-faint hover:text-ink-muted cursor-grab active:cursor-grabbing shrink-0" onClick={e => e.stopPropagation()}>
-                        <GripVertical size={16} />
-                      </div>
+                      {cat.kind === 'unplanned' ? (
+                        <div className="text-ink-faint shrink-0" title="Reserved category">
+                          <Zap size={16} />
+                        </div>
+                      ) : (
+                        <div className="text-ink-faint hover:text-ink-muted cursor-grab active:cursor-grabbing shrink-0" onClick={e => e.stopPropagation()}>
+                          <GripVertical size={16} />
+                        </div>
+                      )}
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1.5">
-                          <span className="font-medium text-ink">{cat.name}</span>
+                          <span className="font-medium text-ink flex items-center gap-1.5">
+                            {cat.name}
+                            {cat.kind === 'unplanned' && (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-400">Reserved</span>
+                            )}
+                          </span>
                           <div className="flex items-center gap-3 text-sm">
                             <span className={isOver ? 'text-red-400 font-semibold' : 'text-ink-muted'}>
                               ₹{spent.toLocaleString('en-IN')}
@@ -315,12 +409,14 @@ export default function Expenses() {
                         >
                           <Pencil size={15} />
                         </button>
-                        <button
-                          onClick={() => setCatToDelete(cat)}
-                          className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        {cat.kind !== 'unplanned' && (
+                          <button
+                            onClick={() => setCatToDelete(cat)}
+                            className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                         {expanded ? <ChevronUp size={16} className="text-ink-faint" /> : <ChevronDown size={16} className="text-ink-faint" />}
                       </div>
                     </div>
@@ -394,25 +490,62 @@ export default function Expenses() {
 
         {unplannedOpen && (
           <div className="border-t border-line p-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-9 h-9 bg-orange-500/10 rounded-lg flex items-center justify-center shrink-0">
-                <Zap size={20} className="text-orange-400" />
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-orange-500/10 rounded-lg flex items-center justify-center shrink-0">
+                  <Zap size={20} className="text-orange-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-ink-muted mb-0.5">Unplanned this month</p>
+                  <p className="text-xl font-bold text-ink">₹{totalUnplanned.toLocaleString('en-IN')}</p>
+                  {unplannedCat && Number(unplannedCat.budget) > 0 && (
+                    <p className="text-xs mt-0.5">
+                      <span className="text-ink-faint">Budget ₹{Number(unplannedCat.budget).toLocaleString('en-IN')}</span>
+                      {' · '}
+                      {monthlyUnplannedTotal > Number(unplannedCat.budget) ? (
+                        <span className="text-red-400">Over by ₹{(monthlyUnplannedTotal - Number(unplannedCat.budget)).toLocaleString('en-IN')}</span>
+                      ) : (
+                        <span className="text-emerald-400">₹{(Number(unplannedCat.budget) - monthlyUnplannedTotal).toLocaleString('en-IN')} left</span>
+                      )}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-ink-muted mb-0.5">Unplanned this month</p>
-                <p className="text-xl font-bold text-ink">₹{totalUnplanned.toLocaleString('en-IN')}</p>
-              </div>
+              {unplannedItems.length > 0 && (
+                <select
+                  value={unplannedFilter} onChange={e => setUnplannedFilter(e.target.value)}
+                  className="border border-line rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-orange-500 bg-surface text-ink-muted"
+                >
+                  <option value="">All sources</option>
+                  <option value="monthly">Monthly budget</option>
+                  {budgets.map(b => (
+                    <option key={Number(b.id)} value={String(b.id)}>{b.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
-            {unplanned.length === 0 && (
+            {unplannedItems.length === 0 && (
               <p className="text-sm text-ink-faint text-center py-4">No unplanned expenses yet</p>
             )}
-            {unplanned.length > 0 && <div className="space-y-1.5">
-            {unplanned.map(u => (
+            {unplannedItems.length > 0 && filteredUnplanned.length === 0 && (
+              <p className="text-sm text-ink-faint text-center py-4">No unplanned expenses for this filter</p>
+            )}
+            {filteredUnplanned.length > 0 && <div className="space-y-1.5">
+            {filteredUnplanned.map(u => {
+              const ub = u.adhoc_budget_id != null ? budgets.find(b => Number(b.id) === u.adhoc_budget_id) : null;
+              return (
               <div key={Number(u.id)} className="flex items-center justify-between text-sm pt-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-ink-muted truncate">{u.description || 'Sudden expense'}</span>
                   <span className="text-xs text-ink-faint shrink-0">{new Date(u.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
-                  {u.source_asset_id ? (
+                  {u.adhoc_budget_id ? (
+                    <span
+                      title={`From adhoc budget ${u.adhoc_budget_name ?? ''}${ub?.asset_name ? ` · drains ${ub.asset_name}` : ''}`}
+                      className="px-1.5 py-0.5 text-[10px] rounded bg-purple-500/10 text-purple-400 shrink-0"
+                    >
+                      {u.adhoc_budget_name ?? 'adhoc'}
+                    </span>
+                  ) : u.source_asset_id ? (
                     <button
                       onClick={() => navigate(`/assets?openEntries=${u.source_asset_id}`)}
                       title={`Open the withdrawal record on ${u.source_asset_name ?? 'asset'}`}
@@ -424,7 +557,7 @@ export default function Expenses() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="font-medium text-ink">₹{Number(u.amount).toLocaleString('en-IN')}</span>
-                  {u.source_asset_id ? (
+                  {u.source_asset_id && !u.adhoc_budget_id ? (
                     <span title="Edit/delete from the asset's manual entries instead" className="text-ink-muted">
                       <Trash2 size={14} />
                     </span>
@@ -435,11 +568,73 @@ export default function Expenses() {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
             </div>}
           </div>
         )}
       </div>
+      </>
+      )}
+
+      {/* Adhoc budgets — non-monthly envelopes drawn from a source asset */}
+      {activeTab === 'budgets' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-ink-muted max-w-xl">
+              Manually-reset envelopes for one-off spends (e.g. Birthday Gifts, Holiday Travel). Each can drain a chosen asset when you spend from it — reset anytime, doesn't follow the monthly cycle.
+            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => navigate('/expenses/history')}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-line rounded-lg text-ink-muted hover:bg-surface-2 transition-colors"
+              >
+                <Archive size={14} /> History
+              </button>
+              <button
+                onClick={() => { setEditingBudget(null); setShowBudgetModal(true); }}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                <Plus size={14} /> New budget
+              </button>
+            </div>
+          </div>
+
+          {budgets.length === 0 && (
+            <div className="bg-surface rounded-2xl border border-line p-8 text-center">
+              <p className="text-sm text-ink-faint">No adhoc budgets yet. Create one to get started.</p>
+            </div>
+          )}
+
+          {budgets.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {budgets.map(b => (
+                <div key={Number(b.id)} className="bg-surface border border-line rounded-2xl p-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                      <span className="font-medium text-ink truncate">{b.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => { setBudgetToReset(b); setResetMode('close'); }} title="Close cycle & reset" className="p-1.5 text-ink-faint hover:text-purple-400 transition-colors"><Archive size={14} /></button>
+                      <button onClick={() => { setBudgetToReset(b); setResetMode('reset'); }} title="Reset (wipes current cycle)" className="p-1.5 text-ink-faint hover:text-purple-400 transition-colors"><RotateCcw size={14} /></button>
+                      <button onClick={() => { setEditingBudget(b); setShowBudgetModal(true); }} title="Edit" className="p-1.5 text-ink-faint hover:text-ink transition-colors"><Pencil size={14} /></button>
+                      <button onClick={() => setBudgetToDelete(b)} title="Delete" className="p-1.5 text-ink-faint hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                  <p className={`text-2xl font-bold ${Number(b.balance) < 0 ? 'text-red-500' : 'text-ink'}`}>
+                    ₹{Number(b.balance).toLocaleString('en-IN')}
+                    <span className="text-sm font-normal text-ink-faint"> / ₹{Number(b.original_amount).toLocaleString('en-IN')}</span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {b.asset_name ? `Source: ${b.asset_name}` : 'No source asset'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {showCatModal && (
         <CategoryModal
@@ -466,7 +661,32 @@ export default function Expenses() {
         />
       )}
       {showAddUnplanned && (
-        <AddUnplannedExpenseModal onClose={() => setShowAddUnplanned(false)} onSaved={load} />
+        <AddUnplannedExpenseModal budgets={budgets} assets={assets} unplannedCat={unplannedCat} monthlyUnplannedTotal={monthlyUnplannedTotal} onClose={() => setShowAddUnplanned(false)} onSaved={load} />
+      )}
+      {showBudgetModal && (
+        <AdhocBudgetModal
+          initial={editingBudget}
+          assets={assets}
+          onClose={() => { setShowBudgetModal(false); setEditingBudget(null); }}
+          onSaved={load}
+        />
+      )}
+      {budgetToReset && (
+        <ResetBudgetModal
+          budget={budgetToReset}
+          mode={resetMode}
+          onClose={() => setBudgetToReset(null)}
+          onSaved={load}
+        />
+      )}
+      {budgetToDelete && (
+        <ConfirmModal
+          title="Delete Adhoc Budget"
+          message={`Permanently delete "${budgetToDelete.name}"? All unplanned expenses booked against it and its asset entry will be deleted too — this cannot be undone.`}
+          confirmText="Delete"
+          onConfirm={async () => { await api.deleteAdhocBudget(Number(budgetToDelete.id)); setBudgetToDelete(null); load(); }}
+          onCancel={() => setBudgetToDelete(null)}
+        />
       )}
       {catToDelete && (
         <ConfirmModal
@@ -491,7 +711,7 @@ export default function Expenses() {
           title="Delete Unplanned Expense"
           message={`Are you sure you want to delete the ₹${Number(unplannedToDelete.amount).toLocaleString('en-IN')} unplanned expense${unplannedToDelete.description ? ` "${unplannedToDelete.description}"` : ''}?`}
           confirmText="Delete"
-          onConfirm={async () => { await deleteUnplanned(Number(unplannedToDelete.id)); setUnplannedToDelete(null); }}
+          onConfirm={async () => { await deleteUnplannedItem(unplannedToDelete); setUnplannedToDelete(null); }}
           onCancel={() => setUnplannedToDelete(null)}
         />
       )}
@@ -1082,7 +1302,7 @@ function ExpenseGrid({ cats, expenses, month, year, onReload, onEditCat, dragId,
               return (
                 <tr
                   key={Number(cat.id)}
-                  draggable
+                  draggable={cat.kind !== 'unplanned'}
                   onDragStart={() => onDragStart(Number(cat.id))}
                   onDragOver={e => { e.preventDefault(); onDragOver(Number(cat.id)); }}
                   onDragLeave={onDragLeave}
@@ -1094,9 +1314,15 @@ function ExpenseGrid({ cats, expenses, month, year, onReload, onEditCat, dragId,
                 >
                   <td className="sticky left-0 z-10 bg-surface group-hover/row:bg-surface-2/50 px-2 py-1.5 border-r border-line" style={{ width: NAME_W, minWidth: NAME_W }}>
                     <div className="flex items-center gap-1.5 group/cat">
-                      <span className="text-ink-faint hover:text-ink-muted cursor-grab active:cursor-grabbing shrink-0">
-                        <GripVertical size={14} />
-                      </span>
+                      {cat.kind === 'unplanned' ? (
+                        <span className="text-ink-faint shrink-0" title="Reserved category">
+                          <Zap size={12} />
+                        </span>
+                      ) : (
+                        <span className="text-ink-faint hover:text-ink-muted cursor-grab active:cursor-grabbing shrink-0">
+                          <GripVertical size={14} />
+                        </span>
+                      )}
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
                       <span className="font-medium text-ink truncate flex-1">{cat.name}</span>
                       <button
@@ -1236,12 +1462,13 @@ function CategoryModal({ initial, month, year, onClose, onSave }: {
   const [budget, setBudget] = useState(String(initial?.budget ?? ''));
   const [color, setColor] = useState(initial?.color ?? '#6366f1');
   const [err, setErr] = useState('');
+  const isReserved = initial?.kind === 'unplanned';
 
   const save = async () => {
     if (!name.trim()) return setErr('Name required');
     try {
       if (initial) {
-        await api.updateCategory(Number(initial.id), { name, budget: Number(budget), color });
+        await api.updateCategory(Number(initial.id), { name: isReserved ? initial.name : name, budget: Number(budget), color });
       } else {
         await api.createCategory({ name, budget: Number(budget), color, month, year });
       }
@@ -1254,8 +1481,11 @@ function CategoryModal({ initial, month, year, onClose, onSave }: {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-ink mb-1">Name</label>
-          <input value={name} onChange={e => setName(e.target.value)}
-            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+          <input value={name} onChange={e => setName(e.target.value)} disabled={isReserved}
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-surface-2 disabled:text-ink-faint" />
+          {isReserved && (
+            <p className="text-xs text-ink-faint mt-1">Reserved category — backs sudden expenses, name can't be changed.</p>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium text-ink mb-1">Budget (₹)</label>
@@ -1288,17 +1518,24 @@ function CategoryModal({ initial, month, year, onClose, onSave }: {
 
 // ─── Add unplanned expense modal ────────────────────────────────────────────
 
-function AddUnplannedExpenseModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AddUnplannedExpenseModal({ budgets, assets, unplannedCat, monthlyUnplannedTotal, onClose, onSaved }: { budgets: AdhocBudget[]; assets: Asset[]; unplannedCat: Category | null; monthlyUnplannedTotal: number; onClose: () => void; onSaved: () => void }) {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [budgetId, setBudgetId] = useState<string>('');
   const [err, setErr] = useState('');
+
+  const selectedBudget = budgets.find(b => String(b.id) === budgetId) ?? null;
+  const sourceAsset = selectedBudget?.asset_id != null ? assets.find(a => a.id === selectedBudget.asset_id) ?? null : null;
 
   const save = async () => {
     const n = Number(amount);
     if (!n || n <= 0) return setErr('Enter a valid amount');
     try {
-      await api.createUnplannedExpense({ amount: n, description: description || null, date });
+      await api.createUnplannedExpense({
+        amount: n, description: description || null, date,
+        adhoc_budget_id: budgetId ? Number(budgetId) : null,
+      });
       onSaved();
       onClose();
     } catch (e: any) { setErr(e.message); }
@@ -1307,6 +1544,31 @@ function AddUnplannedExpenseModal({ onClose, onSaved }: { onClose: () => void; o
   return (
     <Modal title="Add unplanned expense" onClose={onClose}>
       <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Budget source</label>
+          <select
+            value={budgetId} onChange={e => setBudgetId(e.target.value)}
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-surface"
+          >
+            <option value="">Monthly budget</option>
+            {budgets.map(b => (
+              <option key={Number(b.id)} value={String(b.id)}>{b.name}</option>
+            ))}
+          </select>
+          {selectedBudget && (
+            <p className="text-xs text-ink-muted mt-1">
+              {selectedBudget.name} budget: ₹{Number(selectedBudget.balance).toLocaleString('en-IN')} remaining
+              {sourceAsset && ` · spends here also reduce ${sourceAsset.name} (currently ₹${Number(sourceAsset.current_value).toLocaleString('en-IN')})`}
+            </p>
+          )}
+          {!selectedBudget && (
+            <p className="text-xs text-ink-muted mt-1">
+              {unplannedCat && Number(unplannedCat.budget) > 0
+                ? `Unplanned budget: ₹${Math.max(0, Number(unplannedCat.budget) - monthlyUnplannedTotal).toLocaleString('en-IN')} remaining of ₹${Number(unplannedCat.budget).toLocaleString('en-IN')}`
+                : 'Drawn from the Unplanned category — no budget set yet (₹0)'}
+            </p>
+          )}
+        </div>
         <div>
           <label className="block text-sm font-medium text-ink mb-1">Amount (₹)</label>
           <input
@@ -1338,3 +1600,148 @@ function AddUnplannedExpenseModal({ onClose, onSaved }: { onClose: () => void; o
     </Modal>
   );
 }
+
+// ─── Adhoc budget create/edit modal ─────────────────────────────────────────
+
+function AdhocBudgetModal({ initial, assets, onClose, onSaved }: { initial: AdhocBudget | null; assets: Asset[]; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [assetId, setAssetId] = useState<string>(initial?.asset_id != null ? String(initial.asset_id) : '');
+  const [original, setOriginal] = useState(initial ? String(initial.original_amount) : '');
+  const [color, setColor] = useState(initial?.color ?? `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`);
+  const [err, setErr] = useState('');
+
+  const save = async () => {
+    if (!name.trim()) return setErr('Enter a name');
+    const orig = Number(original) || 0;
+    const asset_id = assetId ? Number(assetId) : null;
+    try {
+      if (initial) {
+        await api.updateAdhocBudget(Number(initial.id), { name: name.trim(), asset_id, original_amount: orig, color });
+      } else {
+        await api.createAdhocBudget({ name: name.trim(), asset_id, original_amount: orig, color });
+      }
+      onSaved();
+      onClose();
+    } catch (e: any) { setErr(e.message); }
+  };
+
+  return (
+    <Modal title={initial ? 'Edit adhoc budget' : 'New adhoc budget'} onClose={onClose}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Name</label>
+          <input
+            autoFocus value={name} onChange={e => setName(e.target.value)}
+            placeholder="e.g. Birthday Gifts, Holiday Travel"
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Source asset</label>
+          <select
+            value={assetId} onChange={e => setAssetId(e.target.value)}
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-surface"
+          >
+            <option value="">No source asset</option>
+            {assets.map(a => (
+              <option key={Number(a.id)} value={String(a.id)}>{a.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-ink-muted mt-1">Spending from this budget drains the chosen asset.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Budget amount (₹)</label>
+          <input
+            type="number" value={original} onChange={e => setOriginal(e.target.value)}
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+          />
+          <p className="text-xs text-ink-muted mt-1">Default value the balance resets to.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Color</label>
+          <div className="flex items-center gap-2">
+            <input type="color" value={color} onChange={e => setColor(e.target.value)} className="h-9 w-16 rounded border border-line bg-surface" />
+            <button
+              type="button"
+              onClick={() => setColor(`#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`)}
+              className="px-3 py-2 text-sm border border-line rounded-lg hover:bg-surface-2 transition-colors flex items-center gap-1.5"
+            >
+              <Shuffle size={14} /> Random
+            </button>
+          </div>
+        </div>
+        {err && <p className="text-sm text-red-400">{err}</p>}
+        <div className="flex gap-2 pt-2">
+          <button onClick={onClose} className="flex-1 px-4 py-2 text-sm border border-line rounded-lg hover:bg-surface-2 transition-colors">Cancel</button>
+          <button onClick={save} className="flex-1 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">Save</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Reset adhoc budget balance modal ───────────────────────────────────────
+
+function ResetBudgetModal({ budget, mode, onClose, onSaved }: { budget: AdhocBudget; mode: 'close' | 'reset'; onClose: () => void; onSaved: () => void }) {
+  const [amount, setAmount] = useState(String(budget.original_amount));
+  const [err, setErr] = useState('');
+  const [archived, setArchived] = useState<{ id: number; name: string } | null>(null);
+  const assetClause = budget.asset_name ? ` and its entry on ${budget.asset_name}` : '';
+  const title = mode === 'close' ? `Close cycle & reset "${budget.name}"` : `Reset "${budget.name}"`;
+
+  const reset = async (toOriginal: boolean) => {
+    setErr('');
+    const body: { amount?: number; persist?: boolean } = { persist: mode === 'close' };
+    if (!toOriginal) body.amount = Number(amount) || 0;
+    try {
+      const result = await api.resetAdhocBudget(Number(budget.id), body);
+      onSaved();
+      if (result.archivedBudget) setArchived(result.archivedBudget);
+      else onClose();
+    } catch (e: any) { setErr(e.message); }
+  };
+
+  if (archived) {
+    return (
+      <Modal title={title} onClose={onClose}>
+        <div className="space-y-4">
+          <p className="text-sm text-ink-muted">
+            This cycle's expenses{assetClause} were archived as <span className="text-ink font-medium">"{archived.name}"</span> — find them anytime under <span className="text-ink">History</span>.
+          </p>
+          <p className="text-sm text-ink-muted">"{budget.name}" is reset and ready for its next cycle.</p>
+          <div className="flex justify-end pt-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">Done</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-ink-muted">
+          Current balance ₹{Number(budget.balance).toLocaleString('en-IN')}.{' '}
+          {mode === 'close'
+            ? <>This cycle's expenses{assetClause} will be archived as history, viewable later under History.</>
+            : <>This cycle's expenses{assetClause} will be permanently deleted — as if they never happened.</>}
+        </p>
+        <div>
+          <label className="block text-sm font-medium text-ink mb-1">Reset to (₹)</label>
+          <input
+            type="number" autoFocus value={amount} onChange={e => setAmount(e.target.value)}
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500"
+          />
+        </div>
+        {err && <p className="text-sm text-red-400">{err}</p>}
+        <div className="flex gap-2 pt-2">
+          <button onClick={() => reset(true)} className="flex-1 px-4 py-2 text-sm border border-line rounded-lg hover:bg-surface-2 transition-colors">
+            To original (₹{Number(budget.original_amount).toLocaleString('en-IN')})
+          </button>
+          <button onClick={() => reset(false)} className="flex-1 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">Reset to amount</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+

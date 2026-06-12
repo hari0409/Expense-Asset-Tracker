@@ -72,12 +72,25 @@ export const api = {
     if (params.year) q.set('year', String(params.year));
     return req<UnplannedExpense[]>(`/unplanned-expenses?${q}`);
   },
-  createUnplannedExpense: (body: { amount: number; description?: string | null; date: string }) =>
-    req<UnplannedExpense>('/unplanned-expenses', { method: 'POST', body: JSON.stringify(body) }),
+  createUnplannedExpense: (body: { amount: number; description?: string | null; date: string; adhoc_budget_id?: number | null }) =>
+    req<UnplannedExpense | Expense>('/unplanned-expenses', { method: 'POST', body: JSON.stringify(body) }),
   updateUnplannedExpense: (id: number, body: { amount: number; description?: string | null; date: string }) =>
     req<UnplannedExpense>(`/unplanned-expenses/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteUnplannedExpense: (id: number) =>
     req<void>(`/unplanned-expenses/${id}`, { method: 'DELETE' }),
+
+  // Adhoc budgets — non-monthly envelopes drawn from a source asset
+  getAdhocBudgets: () => req<AdhocBudget[]>('/adhoc-budgets'),
+  getArchivedAdhocBudgets: () => req<AdhocBudget[]>('/adhoc-budgets/archived'),
+  getAdhocBudgetExpenses: (id: number) => req<UnplannedExpense[]>(`/adhoc-budgets/${id}/expenses`),
+  createAdhocBudget: (body: { name: string; asset_id?: number | null; original_amount: number; color?: string; notes?: string | null }) =>
+    req<AdhocBudget>('/adhoc-budgets', { method: 'POST', body: JSON.stringify(body) }),
+  updateAdhocBudget: (id: number, body: Partial<AdhocBudget>) =>
+    req<AdhocBudget>(`/adhoc-budgets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  resetAdhocBudget: (id: number, body: { amount?: number; persist?: boolean } = {}) =>
+    req<AdhocBudgetResetResult>(`/adhoc-budgets/${id}/reset`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteAdhocBudget: (id: number) =>
+    req<void>(`/adhoc-budgets/${id}`, { method: 'DELETE' }),
 
   // Rent-out persons
   getRentOutPersons: () => req<RentOutPerson[]>('/rent-outs/persons'),
@@ -154,9 +167,9 @@ export const api = {
   getAssetsTimeline: () => req<AssetTimelinePoint[]>('/assets/timeline'),
   getAssetsTimelineMonth: (year: number, month: number) => req<AssetSnapshotRow[]>(`/assets/timeline/${year}/${month}`),
   getAssetEntries: (assetId: number) => req<AssetManualEntry[]>(`/assets/${assetId}/entries`),
-  createAssetEntry: (assetId: number, body: { amount: number; note?: string; date?: string; is_expense?: boolean }) =>
+  createAssetEntry: (assetId: number, body: { amount: number; note?: string; date?: string; targets?: { asset_id: number; amount: number }[] }) =>
     req<AssetManualEntry>(`/assets/${assetId}/entries`, { method: 'POST', body: JSON.stringify(body) }),
-  updateAssetEntry: (assetId: number, entryId: number, body: { amount: number; note?: string; date?: string; is_expense?: boolean }) =>
+  updateAssetEntry: (assetId: number, entryId: number, body: { amount: number; note?: string; date?: string }) =>
     req<AssetManualEntry>(`/assets/${assetId}/entries/${entryId}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteAssetEntry: (assetId: number, entryId: number) =>
     req<void>(`/assets/${assetId}/entries/${entryId}`, { method: 'DELETE' }),
@@ -230,6 +243,7 @@ export interface Category {
   month: number;
   year: number;
   spent: number;
+  kind: 'normal' | 'unplanned';
 }
 
 export interface Expense {
@@ -237,6 +251,7 @@ export interface Expense {
   category_id: number;
   category_name: string;
   category_color: string;
+  category_kind?: 'normal' | 'unplanned';
   budget: number;
   amount: number;
   formula: string | null;
@@ -255,7 +270,27 @@ export interface UnplannedExpense {
   year: number;
   source_asset_id?: number | null;
   source_asset_name?: string | null;
+  adhoc_budget_id?: number | null;
+  adhoc_budget_name?: string | null;
   created_at: string;
+}
+
+export interface AdhocBudget {
+  id: number;
+  name: string;
+  asset_id: number | null;
+  asset_name?: string | null;
+  original_amount: number;
+  balance: number;
+  color: string;
+  notes: string | null;
+  archived: number;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export interface AdhocBudgetResetResult extends AdhocBudget {
+  archivedBudget: { id: number; name: string } | null;
 }
 
 export interface DailyTotal {
@@ -389,6 +424,9 @@ export interface AssetManualEntry {
   note: string | null;
   date: string;
   linked_unplanned_expense_id: number | null;
+  transfer_group: string | null;
+  adhoc_budget_id: number | null;
+  adhoc_budget_name: string | null;
   created_at: string;
 }
 

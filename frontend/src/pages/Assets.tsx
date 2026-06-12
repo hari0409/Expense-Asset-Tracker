@@ -302,7 +302,7 @@ export default function Assets() {
         <AssetModal initial={editing} onClose={() => setShowModal(false)} onSave={load} />
       )}
       {entriesAsset && (
-        <AssetEntriesModal asset={entriesAsset} onClose={() => { setEntriesAsset(null); load(); }} />
+        <AssetEntriesModal asset={entriesAsset} assets={assets} onClose={() => { setEntriesAsset(null); load(); }} />
       )}
       {assetToDelete && (
         <ConfirmModal
@@ -321,13 +321,13 @@ export default function Assets() {
   );
 }
 
-function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => void }) {
+function AssetEntriesModal({ asset, assets, onClose }: { asset: Asset; assets: Asset[]; onClose: () => void }) {
   const [entries, setEntries] = useState<AssetManualEntry[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [isExpense, setIsExpense] = useState(false);
+  const [targets, setTargets] = useState<{ asset_id: string; amount: string }[]>([{ asset_id: '', amount: '' }]);
   const [err, setErr] = useState('');
   const [entryToDelete, setEntryToDelete] = useState<AssetManualEntry | null>(null);
 
@@ -335,28 +335,49 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
   useEffect(() => { loadEntries(); }, []);
 
   const resetForm = () => {
-    setEditingId(null); setAmount(''); setNote(''); setIsExpense(false);
+    setEditingId(null); setAmount(''); setNote('');
+    setTargets([{ asset_id: '', amount: '' }]);
     setDate(new Date().toISOString().slice(0, 10));
   };
+
+  // Only plain deposits (positive, not part of a transfer, not an adhoc-expense leg) can be edited inline.
+  const isEditable = (e: AssetManualEntry) => Number(e.amount) > 0 && e.transfer_group == null && e.linked_unplanned_expense_id == null;
 
   const startEdit = (e: AssetManualEntry) => {
     setEditingId(e.id);
     setAmount(String(e.amount));
     setNote(e.note ?? '');
     setDate(e.date);
-    setIsExpense(e.linked_unplanned_expense_id != null);
     setErr('');
   };
+
+  const targetAssets = assets.filter(a => Number(a.id) !== Number(asset.id));
+  const amountNum = Number(amount);
+  const isWithdrawal = amount !== '' && !isNaN(amountNum) && amountNum < 0;
+  const targetSum = targets.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const remainder = Math.round((Math.abs(amountNum) - targetSum) * 100) / 100;
+  const transferReady = isWithdrawal && targets.some(t => t.asset_id && Number(t.amount) > 0) && remainder === 0;
+
+  const setTarget = (i: number, patch: Partial<{ asset_id: string; amount: string }>) =>
+    setTargets(ts => ts.map((t, idx) => idx === i ? { ...t, ...patch } : t));
 
   const save = async () => {
     const n = Number(amount);
     if (!amount || isNaN(n) || n === 0) return setErr('Enter a non-zero amount');
     setErr('');
-    const body = { amount: n, note: note || undefined, date, is_expense: n < 0 && isExpense };
     if (editingId) {
-      await api.updateAssetEntry(Number(asset.id), editingId, body);
+      // Inline edits are limited to plain positive deposits.
+      if (n < 0) return setErr('Withdrawals are transfers — delete and re-add.');
+      await api.updateAssetEntry(Number(asset.id), editingId, { amount: n, note: note || undefined, date });
+    } else if (n < 0) {
+      const clean = targets
+        .filter(t => t.asset_id && Number(t.amount) > 0)
+        .map(t => ({ asset_id: Number(t.asset_id), amount: Number(t.amount) }));
+      if (clean.length === 0) return setErr('Map the withdrawal to at least one target asset');
+      if (remainder !== 0) return setErr('Target amounts must add up to the withdrawal');
+      await api.createAssetEntry(Number(asset.id), { amount: n, note: note || undefined, date, targets: clean });
     } else {
-      await api.createAssetEntry(Number(asset.id), body);
+      await api.createAssetEntry(Number(asset.id), { amount: n, note: note || undefined, date });
     }
     resetForm();
     loadEntries();
@@ -368,8 +389,6 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
   };
 
   const total = entries.reduce((s, e) => s + Number(e.amount), 0);
-  const amountNum = Number(amount);
-  const showExpenseOption = amount !== '' && !isNaN(amountNum) && amountNum < 0;
 
   return (
     <Modal title={`Manual entries — ${asset.name}`} onClose={onClose}>
@@ -384,7 +403,7 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
               placeholder="e.g. 50000 or -10000"
               className="w-full border border-line rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
             />
-            <p className="text-[10px] text-ink-faint mt-0.5">Positive = invest, negative = withdraw</p>
+            <p className="text-[10px] text-ink-faint mt-0.5">Positive = invest, negative = transfer out</p>
           </div>
           <div className="col-span-1">
             <label className="block text-xs font-medium text-ink-muted mb-1">Note (optional)</label>
@@ -405,16 +424,49 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
             />
           </div>
         </div>
-        {showExpenseOption && (
-          <label className="flex items-center gap-2 text-xs text-ink-muted">
-            <input type="checkbox" checked={isExpense} onChange={e => setIsExpense(e.target.checked)} className="rounded border-line-strong text-indigo-400 focus:ring-indigo-500" />
-            Record this withdrawal as an unplanned expense
-          </label>
+        {isWithdrawal && !editingId && (
+          <div className="border border-line rounded-lg p-3 space-y-2 bg-surface-2/40">
+            <p className="text-xs text-ink-muted">
+              Withdrawals move money between assets — map the target(s). To spend money out of net worth, add it from the Expenses page instead.
+            </p>
+            {targets.map((t, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <select
+                  value={t.asset_id} onChange={e => setTarget(i, { asset_id: e.target.value })}
+                  className="flex-1 border border-line rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-surface"
+                >
+                  <option value="">Target asset…</option>
+                  {targetAssets.map(a => <option key={Number(a.id)} value={String(a.id)}>{a.name}</option>)}
+                </select>
+                <input
+                  type="number" value={t.amount} onChange={e => setTarget(i, { amount: e.target.value })}
+                  placeholder="₹" className="w-28 border border-line rounded-lg px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                {targets.length > 1 && (
+                  <button onClick={() => setTargets(ts => ts.filter((_, idx) => idx !== i))} className="p-1 text-ink-faint hover:text-red-500">
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+            <div className="flex items-center justify-between">
+              <button onClick={() => setTargets(ts => [...ts, { asset_id: '', amount: '' }])} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                <Plus size={12} /> Add target
+              </button>
+              <span className={`text-xs ${remainder === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {remainder === 0 ? 'Balanced' : `₹${Math.abs(remainder).toLocaleString('en-IN')} ${remainder > 0 ? 'left to map' : 'over'}`}
+              </span>
+            </div>
+          </div>
         )}
         {err && <p className="text-xs text-red-400">{err}</p>}
         <div className="flex items-center gap-2">
-          <button onClick={save} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">
-            <Plus size={14} /> {editingId ? 'Save entry' : 'Add entry'}
+          <button
+            onClick={save}
+            disabled={isWithdrawal && !editingId && !transferReady}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Plus size={14} /> {editingId ? 'Save entry' : isWithdrawal ? 'Add transfer' : 'Add entry'}
           </button>
           {editingId && (
             <button onClick={resetForm} className="px-3 py-2 text-sm border border-line rounded-lg hover:bg-surface-2">Cancel</button>
@@ -441,18 +493,32 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
                       {e.linked_unplanned_expense_id != null && (
                         <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-red-500/10 text-red-500 align-middle">expense</span>
                       )}
+                      {e.transfer_group != null && (
+                        <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-sky-500/10 text-sky-400 align-middle">transfer</span>
+                      )}
+                      {e.adhoc_budget_id != null && (
+                        <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] rounded bg-purple-500/10 text-purple-400 align-middle">{e.adhoc_budget_name} spends</span>
+                      )}
                     </td>
                     <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${Number(e.amount) >= 0 ? 'text-emerald-400' : 'text-red-500'}`}>
                       {Number(e.amount) >= 0 ? '+' : ''}₹{Math.abs(Number(e.amount)).toLocaleString('en-IN')}
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => startEdit(e)} className="p-1 text-ink-faint hover:bg-surface-2 rounded transition-colors">
-                          <Pencil size={12} />
-                        </button>
-                        <button onClick={() => remove(e.id)} className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors">
-                          <Trash2 size={12} />
-                        </button>
+                        {isEditable(e) && (
+                          <button onClick={() => startEdit(e)} className="p-1 text-ink-faint hover:bg-surface-2 rounded transition-colors">
+                            <Pencil size={12} />
+                          </button>
+                        )}
+                        {e.adhoc_budget_id != null ? (
+                          <span title={`Total spent from the "${e.adhoc_budget_name}" budget — manage its expenses on the Expenses page`} className="p-1 text-ink-faint">
+                            <Trash2 size={12} />
+                          </span>
+                        ) : (
+                          <button onClick={() => remove(e.id)} className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors">
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -480,7 +546,13 @@ function AssetEntriesModal({ asset, onClose }: { asset: Asset; onClose: () => vo
       {entryToDelete && (
         <ConfirmModal
           title="Delete Entry"
-          message={`Are you sure you want to delete the entry from ${entryToDelete.date}? (₹${Math.abs(Number(entryToDelete.amount)).toLocaleString('en-IN')})`}
+          message={
+            entryToDelete.transfer_group != null
+              ? `This is a transfer — deleting it removes both legs (the withdrawal and the matching deposit). Continue?`
+              : entryToDelete.linked_unplanned_expense_id != null
+              ? `This withdrawal is an adhoc expense — deleting it also removes the expense and refunds the budget. Continue?`
+              : `Are you sure you want to delete the entry from ${entryToDelete.date}? (₹${Math.abs(Number(entryToDelete.amount)).toLocaleString('en-IN')})`
+          }
           confirmText="Delete"
           onConfirm={async () => {
             await api.deleteAssetEntry(Number(asset.id), entryToDelete.id);

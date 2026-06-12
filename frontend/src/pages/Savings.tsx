@@ -6,7 +6,6 @@ import Modal from '../components/Modal';
 import ConfirmModal from '../components/ConfirmModal';
 import MonthPicker from '../components/MonthPicker';
 import { Trash2, Pencil, CheckCheck, Camera, RotateCcw, Link2Off } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Legend } from 'recharts';
 
 const SAVING_TYPES = ['SIP', 'PPF', 'Bank Savings', 'FD', 'RD', 'NPS', 'Stocks', 'Crypto', 'Cash', 'Other'];
 const now = new Date();
@@ -92,11 +91,6 @@ export default function Savings() {
 
   const entryForInstr = (instrId: number) => entries.find(e => Number(e.instrument_id) === instrId);
 
-  const chartData = instruments.map(i => {
-    const entry = entryForInstr(Number(i.id));
-    return { name: i.name, target: Number(i.monthly_target), saved: entry ? Number(entry.amount) : 0, color: i.color };
-  });
-
   const mappableUnrecorded = instruments.some(i => i.asset_id != null && !entries.find(e => Number(e.instrument_id) === Number(i.id)));
 
   return (
@@ -161,32 +155,6 @@ export default function Savings() {
           <MonthPicker month={month} year={year} onChange={(m, y) => { setMonth(m); setYear(y); }} />
         </div>
       </div>
-
-      {instruments.length > 0 && (
-        <div className="bg-surface rounded-2xl border border-line p-5">
-          <h2 className="text-sm font-semibold text-ink-muted mb-4">Target vs Saved</h2>
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9b9aa3' }} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#9b9aa3' }} axisLine={false} tickLine={false} width={55} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
-                <Tooltip
-                  formatter={(v) => `₹${Number(v).toLocaleString('en-IN')}`}
-                  contentStyle={{ background: '#141418', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, color: '#f3f1ec' }}
-                  labelStyle={{ color: '#9b9aa3' }}
-                  itemStyle={{ color: '#f3f1ec' }}
-                  cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#9b9aa3' }} />
-                <Bar dataKey="target" name="Target" fill="#2d2d35" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="saved" name="Saved" radius={[3, 3, 0, 0]}>
-                  {chartData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
 
       {instruments.length === 0 && (
         <div className="text-center py-16 text-ink-faint">

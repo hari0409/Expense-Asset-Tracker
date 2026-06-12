@@ -13,9 +13,9 @@ router.get('/', async (req, res) => {
   try {
     const row = await db.execute({
       sql: `SELECT * FROM monthly_income
-            WHERE (year * 12 + month) <= ?
+            WHERE (year * 12 + month) <= ? AND user_id = ?
             ORDER BY (year * 12 + month) DESC LIMIT 1`,
-      args: [threshold],
+      args: [threshold, req.userId!],
     });
     res.json(row.rows[0] ?? null);
   } catch (e: any) {
@@ -31,13 +31,13 @@ router.post('/', async (req, res) => {
   }
   try {
     await db.execute({
-      sql: `INSERT INTO monthly_income (month, year, amount, notes) VALUES (?, ?, ?, ?)
-            ON CONFLICT(month, year) DO UPDATE SET amount=excluded.amount, notes=excluded.notes`,
-      args: [Number(month), Number(year), Number(amount), notes ?? null],
+      sql: `INSERT INTO monthly_income (month, year, amount, notes, user_id) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, month, year) DO UPDATE SET amount=excluded.amount, notes=excluded.notes`,
+      args: [Number(month), Number(year), Number(amount), notes ?? null, req.userId!],
     });
     const row = await db.execute({
-      sql: `SELECT * FROM monthly_income WHERE month = ? AND year = ?`,
-      args: [Number(month), Number(year)],
+      sql: `SELECT * FROM monthly_income WHERE month = ? AND year = ? AND user_id = ?`,
+      args: [Number(month), Number(year), req.userId!],
     });
     res.status(201).json(row.rows[0]);
   } catch (e: any) {
@@ -46,11 +46,11 @@ router.post('/', async (req, res) => {
 });
 
 // GET /api/income/history — all entries ordered chronologically
-router.get('/history', async (_req, res) => {
+router.get('/history', async (req, res) => {
   try {
     const rows = await db.execute({
-      sql: `SELECT * FROM monthly_income ORDER BY year ASC, month ASC`,
-      args: [],
+      sql: `SELECT * FROM monthly_income WHERE user_id = ? ORDER BY year ASC, month ASC`,
+      args: [req.userId!],
     });
     res.json(rows.rows);
   } catch (e: any) {

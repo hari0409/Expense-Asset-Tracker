@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ReactFlow, Background, Controls, Panel, Handle, Position,
@@ -176,6 +176,7 @@ export default function Mapping() {
         nodeTypes={nodeTypes}
         fitView
         proOptions={{ hideAttribution: true }}
+        style={{ '--xy-controls-button-background-color': '#1d1d23', '--xy-controls-button-background-color-hover': '#2d2d35', '--xy-controls-button-color': '#9b9aa3', '--xy-controls-button-color-hover': '#f3f1ec', '--xy-controls-button-border-color': 'rgba(255,255,255,0.08)' } as CSSProperties}
       >
         <Background />
         <Controls />

@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/expenses', label: 'Expenses', icon: Receipt },
+  { to: '/expenses', label: 'Budgets & Expenses', icon: Receipt },
   { to: '/rent-outs', label: 'Rent Outs', icon: HandCoins },
   { to: '/savings', label: 'Savings', icon: PiggyBank },
   { to: '/loans', label: 'Loans & EMI', icon: CreditCard },
@@ -32,8 +32,8 @@ export default function Layout() {
   };
 
   return (
-    <div className="flex min-h-screen bg-canvas">
-      <aside className="w-60 bg-sidebar border-r border-line flex flex-col shrink-0 print:hidden">
+    <div className="flex h-screen overflow-hidden bg-canvas">
+      <aside className="w-60 bg-sidebar border-r border-line flex flex-col shrink-0 overflow-y-auto print:hidden">
         <div className="px-5 py-6 border-b border-line">
           <h1 className="text-lg font-semibold text-ink leading-tight tracking-tight">Expense &amp;<br />Asset Tracker</h1>
         </div>

@@ -211,10 +211,14 @@ export default function Dashboard() {
 
   useEffect(() => { load(); }, [load]);
 
-  const totalSpent = cats.reduce((s, c) => s + Number(c.spent), 0);
+  const plannedSpent = cats.filter(c => c.kind !== 'unplanned').reduce((s, c) => s + Number(c.spent), 0);
+  // Spent from the reserved "Unplanned" category — comes out of this month's budget/income.
+  const monthlyUnplannedTotal = cats.filter(c => c.kind === 'unplanned').reduce((s, c) => s + Number(c.spent), 0);
+  // Spent from adhoc budgets — drawn from assets set aside earlier, not from this month's income.
+  const adhocUnplannedTotal = unplanned.reduce((s, u) => s + Number(u.amount), 0);
   const totalEmi = emiPayments.reduce((s, p) => s + Number(p.amount), 0);
-  const totalUnplanned = unplanned.reduce((s, u) => s + Number(u.amount), 0);
-  const totalOutflow = totalSpent + totalEmi + totalUnplanned;
+  const totalUnplanned = monthlyUnplannedTotal + adhocUnplannedTotal;
+  const totalOutflow = plannedSpent + totalEmi + totalUnplanned;
 
   const pendingRent = persons.reduce((s, p) => s + Number(p.outstanding), 0);
   const pendingPersonCount = persons.filter(p => Number(p.outstanding) > 0).length;
@@ -264,7 +268,7 @@ export default function Dashboard() {
                   <Receipt size={14} className="text-indigo-400 shrink-0" />
                   <span className="text-xs">Expenses</span>
                 </div>
-                <p className="text-sm font-semibold text-ink">{fmt(totalSpent)}</p>
+                <p className="text-sm font-semibold text-ink">{fmt(plannedSpent)}</p>
               </Link>
               <Link to="/expenses" className="rounded-lg p-2.5 border border-transparent hover:border-line hover:bg-white/[0.04] transition-colors">
                 <div className="flex items-center gap-1.5 text-ink-faint mb-1">
@@ -433,9 +437,9 @@ export default function Dashboard() {
             <h2 className="font-semibold text-ink text-sm mb-3">Money Flow — {now.toLocaleString('default', { month: 'long' })}</h2>
             <MoneyFlow
               income={incomeAmount}
-              expenses={totalSpent}
+              expenses={plannedSpent}
               emi={totalEmi}
-              unplanned={totalUnplanned}
+              unplanned={monthlyUnplannedTotal}
               savings={monthlySavings}
             />
           </div>

@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Expenses from './pages/Expenses';
+import BudgetHistory from './pages/BudgetHistory';
 import RentOuts from './pages/RentOuts';
 import Savings from './pages/Savings';
 import Assets from './pages/Assets';
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/" element={<Layout />}>
               <Route index element={<Dashboard />} />
               <Route path="expenses" element={<Expenses />} />
+              <Route path="expenses/history" element={<BudgetHistory />} />
               <Route path="rent-outs" element={<RentOuts />} />
               <Route path="savings" element={<Savings />} />
               <Route path="assets" element={<Assets />} />
